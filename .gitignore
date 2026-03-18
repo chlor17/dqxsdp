@@ -9,3 +9,10 @@ __pycache__/
 
 # Databricks bundle state
 .databricks/
+.databricks-resources.json
+
+# IDE and tooling
+.claude/
+.cursor/
+.ai-dev-kit/
+.mcp.json
