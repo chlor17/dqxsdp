@@ -1,6 +1,10 @@
 bundle:
   name: dqx-pipeline
 
+sync:
+  include:
+    - config.yaml
+
 variables:
   catalog:
     default: your_catalog
