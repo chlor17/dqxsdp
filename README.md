@@ -78,7 +78,16 @@ Defined in `databricks.yml`:
 |---|---|---|
 | `dqx-full-load` | Weekly | Full overwrite of bronze, then silver pipeline update |
 | `dqx-partial-load` | Every 6 hours | Merge/upsert into bronze, then silver pipeline update |
-| `dqx-full-scenario` | Demo / ad-hoc | Runs all 7 simulation steps end-to-end |
+| `dqx-scenario-run` | Demo / ad-hoc | Single parameterised run: write test data → bronze → silver |
+
+Run a scenario step from the CLI:
+```bash
+# Step 1 — full baseline
+databricks bundle run scenario_run --profile <profile> -p step=1 -p load_type=full
+
+# Step 2 — partial with bad data
+databricks bundle run scenario_run --profile <profile> -p step=2 -p load_type=partial
+```
 
 ## 7-step simulation scenario
 
