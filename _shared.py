@@ -4,7 +4,6 @@
 
 # COMMAND ----------
 
-import uuid
 from databricks.sdk import WorkspaceClient
 from databricks.labs.dqx.engine import DQEngine
 from databricks.labs.dqx.rule import DQRowRule
@@ -41,7 +40,7 @@ def write_quarantine(invalid_df, load_type="unknown"):
         try:    return opt.get()
         except: return "N/A"
 
-    run_id = str(uuid.uuid4())  # unique per write_quarantine() call (each task run)
+    run_id = str(_get(ctx.jobRunId()))
 
     quarantine_df = (
         invalid_df
@@ -55,7 +54,7 @@ def write_quarantine(invalid_df, load_type="unknown"):
             F.current_timestamp().alias("quarantine_timestamp"),
             F.lit(_get(ctx.notebookPath()).split("/")[-1]).alias("pipeline_name"),
             F.lit(_get(ctx.jobId())).alias("pipeline_id"),
-            F.lit(run_id).alias("run_id"),  # unique per task (UUID generated once per call)
+            F.lit(run_id).alias("run_id"),
             F.lit(load_type).alias("load_type"),
         )
     )
