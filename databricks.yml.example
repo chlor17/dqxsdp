@@ -1,0 +1,202 @@
+bundle:
+  name: dqx-pipeline
+
+variables:
+  catalog:
+    default: your_catalog
+  schema:
+    default: your_schema
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://your-workspace.cloud.databricks.com
+      profile: your-profile
+      file_path: /Workspace/Users/your-email@example.com/dqx
+
+resources:
+
+  # ── Silver SDP pipeline ────────────────────────────────────────────────────
+  pipelines:
+    silver_scd2:
+      name: dqx-silver-scd2
+      catalog: ${var.catalog}
+      schema:  ${var.schema}
+      serverless: true
+      configuration:
+        Catalog:      ${var.catalog}
+        Schema:       ${var.schema}
+        Bronze_table: bronze_table
+      libraries:
+        - file:
+            path: ./SilverTableDP.py
+
+  # ── Jobs ──────────────────────────────────────────────────────────────────
+  jobs:
+
+    # Production — full load (weekly)
+    full_load:
+      name: dqx-full-load
+      tasks:
+        - task_key: full_load
+          notebook_task:
+            notebook_path: ./LandingZoneBronze.py
+            base_parameters:
+              load_type: full
+        - task_key: silver
+          depends_on:
+            - task_key: full_load
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.silver_scd2.id}
+
+    # Production — partial load (every 6h)
+    partial_load:
+      name: dqx-partial-load
+      tasks:
+        - task_key: partial_load
+          notebook_task:
+            notebook_path: ./LandingZoneBronze.py
+            base_parameters:
+              load_type: partial
+        - task_key: silver
+          depends_on:
+            - task_key: partial_load
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.silver_scd2.id}
+
+    # Demo scenario: full → partial → partial → full → partial → partial → full
+    full_scenario:
+      name: dqx-full-scenario
+      tasks:
+        # Step 1 — full baseline
+        - task_key: write_1
+          notebook_task:
+            notebook_path: ./WriteTestData.py
+            base_parameters:
+              step: "1"
+        - task_key: bronze_1
+          depends_on: [{task_key: write_1}]
+          notebook_task:
+            notebook_path: ./LandingZoneBronze.py
+            base_parameters:
+              load_type: full
+        - task_key: silver_1
+          depends_on: [{task_key: bronze_1}]
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.silver_scd2.id}
+
+        # Step 2 — partial: new records
+        - task_key: write_2
+          depends_on: [{task_key: silver_1}]
+          notebook_task:
+            notebook_path: ./WriteTestData.py
+            base_parameters:
+              step: "2"
+        - task_key: bronze_2
+          depends_on: [{task_key: write_2}]
+          notebook_task:
+            notebook_path: ./LandingZoneBronze.py
+            base_parameters:
+              load_type: partial
+        - task_key: silver_2
+          depends_on: [{task_key: bronze_2}]
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.silver_scd2.id}
+
+        # Step 3 — partial: update + new
+        - task_key: write_3
+          depends_on: [{task_key: silver_2}]
+          notebook_task:
+            notebook_path: ./WriteTestData.py
+            base_parameters:
+              step: "3"
+        - task_key: bronze_3
+          depends_on: [{task_key: write_3}]
+          notebook_task:
+            notebook_path: ./LandingZoneBronze.py
+            base_parameters:
+              load_type: partial
+        - task_key: silver_3
+          depends_on: [{task_key: bronze_3}]
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.silver_scd2.id}
+
+        # Step 4 — full: delete test (Alice absent)
+        - task_key: write_4
+          depends_on: [{task_key: silver_3}]
+          notebook_task:
+            notebook_path: ./WriteTestData.py
+            base_parameters:
+              step: "4"
+        - task_key: bronze_4
+          depends_on: [{task_key: write_4}]
+          notebook_task:
+            notebook_path: ./LandingZoneBronze.py
+            base_parameters:
+              load_type: full
+        - task_key: silver_4
+          depends_on: [{task_key: bronze_4}]
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.silver_scd2.id}
+
+        # Step 5 — partial: update Eve
+        - task_key: write_5
+          depends_on: [{task_key: silver_4}]
+          notebook_task:
+            notebook_path: ./WriteTestData.py
+            base_parameters:
+              step: "5"
+        - task_key: bronze_5
+          depends_on: [{task_key: write_5}]
+          notebook_task:
+            notebook_path: ./LandingZoneBronze.py
+            base_parameters:
+              load_type: partial
+        - task_key: silver_5
+          depends_on: [{task_key: bronze_5}]
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.silver_scd2.id}
+
+        # Step 6 — partial: update Frank + new Henry
+        - task_key: write_6
+          depends_on: [{task_key: silver_5}]
+          notebook_task:
+            notebook_path: ./WriteTestData.py
+            base_parameters:
+              step: "6"
+        - task_key: bronze_6
+          depends_on: [{task_key: write_6}]
+          notebook_task:
+            notebook_path: ./LandingZoneBronze.py
+            base_parameters:
+              load_type: partial
+        - task_key: silver_6
+          depends_on: [{task_key: bronze_6}]
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.silver_scd2.id}
+
+        # Step 7 — full refresh
+        - task_key: write_7
+          depends_on: [{task_key: silver_6}]
+          notebook_task:
+            notebook_path: ./WriteTestData.py
+            base_parameters:
+              step: "7"
+        - task_key: bronze_7
+          depends_on: [{task_key: write_7}]
+          notebook_task:
+            notebook_path: ./LandingZoneBronze.py
+            base_parameters:
+              load_type: full
+        - task_key: silver_7
+          depends_on: [{task_key: bronze_7}]
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.silver_scd2.id}
+
+        # Summary
+        - task_key: summary_metrics
+          depends_on: [{task_key: silver_7}]
+          notebook_task:
+            notebook_path: ./SummaryMetrics.py

@@ -1,0 +1,11 @@
+# Personal workspace config — copy from *.example and fill in your details
+config.yaml
+databricks.yml
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Databricks bundle state
+.databricks/
