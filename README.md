@@ -16,18 +16,30 @@ A end-to-end Databricks data quality demo using [Databricks Labs DQX](https://gi
 Landing Volume (Parquet)
         │
         ▼
-  LandingZoneBronze.py  ──── DQX checks ────┐
-        │                                    │
-        │ valid rows                         │ invalid rows
-        ▼                                    ▼
-Bronze Delta table               Quarantine table  (dead end)
-  (CDF enabled)
+  LandingZoneBronze.py
+        │ DQX checks
+        ├──────────────────────────────────────┐
+        │ valid rows                           │ invalid rows
+        ▼                                      ▼
+  [quarantine rate check]            Quarantine table
+  abort if rate > threshold
         │
         ▼
-SilverTableDP.py (Lakeflow SDP pipeline)
+  Clean Data Volume (Parquet)
+        │ + batch_ts column
+        ▼
+  Bronze Delta table (CDF enabled)
         │
         ▼
-  Silver SCD Type 2
+  SilverTableDP.py (Lakeflow SDP pipeline)
+        ├──────────────────────────────────────┐
+        ▼                                      ▼
+  Silver SCD Type 2                    operation_log
+        │                                      │
+        └──────────────┬───────────────────────┘
+                       │
+                       ▼
+               SummaryMetrics.py
 ```
 
 ## Repository structure
