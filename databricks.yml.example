@@ -54,6 +54,10 @@ resources:
             - task_key: full_load
           pipeline_task:
             pipeline_id: ${resources.pipelines.silver_scd2.id}
+        - task_key: summary
+          depends_on: [{task_key: silver}]
+          notebook_task:
+            notebook_path: ./SummaryMetrics.py
 
     # Production — partial load (every 6h)
     partial_load:
@@ -69,6 +73,10 @@ resources:
             - task_key: partial_load
           pipeline_task:
             pipeline_id: ${resources.pipelines.silver_scd2.id}
+        - task_key: summary
+          depends_on: [{task_key: silver}]
+          notebook_task:
+            notebook_path: ./SummaryMetrics.py
 
     # Single parameterised scenario run — one write → bronze → silver per execution
     # Run with: databricks bundle run scenario_run --profile <profile> \
@@ -97,3 +105,7 @@ resources:
           depends_on: [{task_key: bronze}]
           pipeline_task:
             pipeline_id: ${resources.pipelines.silver_scd2.id}
+        - task_key: summary
+          depends_on: [{task_key: silver}]
+          notebook_task:
+            notebook_path: ./SummaryMetrics.py

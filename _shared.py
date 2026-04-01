@@ -22,14 +22,19 @@ _CHECKS = [
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def apply_dqx(landing_df):
-    """Run DQX checks and split into valid / invalid DataFrames."""
+    """Run DQX checks and split into valid / invalid DataFrames.
+
+    Returns (valid_df, invalid_df, valid_count, quarantine_count).
+    """
     dq = DQEngine(WorkspaceClient(), spark=spark)
     valid_df, invalid_df = dq.apply_checks_and_split(landing_df, _CHECKS)
-    print(f"Valid: {valid_df.count()} | Quarantined: {invalid_df.count()}")
-    return valid_df, invalid_df
+    valid_count      = valid_df.count()
+    quarantine_count = invalid_df.count()
+    print(f"Valid: {valid_count} | Quarantined: {quarantine_count}")
+    return valid_df, invalid_df, valid_count, quarantine_count
 
 
-def write_quarantine(invalid_df, load_type="unknown"):
+def write_quarantine(invalid_df, load_type="unknown", batch_ts=None):
     """Explode DQX errors into one row per error and append to quarantine table."""
     if invalid_df.count() == 0:
         print("No quarantine records — all rows passed DQX checks.")
@@ -51,7 +56,7 @@ def write_quarantine(invalid_df, load_type="unknown"):
             F.col("error.message").alias("error_message"),
             F.col("error.columns")[0].alias("faulty_column"),
             F.col("row_payload"),
-            F.current_timestamp().alias("quarantine_timestamp"),
+            (F.to_timestamp(F.lit(batch_ts), "yyyyMMddHHmmss") if batch_ts else F.current_timestamp()).alias("quarantine_timestamp"),
             F.lit(_get(ctx.notebookPath()).split("/")[-1]).alias("pipeline_name"),
             F.lit(_get(ctx.jobId())).alias("pipeline_id"),
             F.lit(run_id).alias("run_id"),

@@ -8,7 +8,7 @@ A end-to-end Databricks data quality demo using [Databricks Labs DQX](https://gi
 - Routes invalid rows to a **quarantine table** with full lineage: which rule fired, which column, the original row payload, and which pipeline run produced it
 - Promotes clean rows through to a **Silver SCD Type 2 table** via a Lakeflow Spark Declarative Pipeline using Change Data Feed
 - Supports both **full** (overwrite) and **partial** (merge/upsert) load modes
-- Ships a 7-step simulation scenario covering inserts, updates, deletes, and bad data of every kind
+- Ships an 8-step simulation scenario covering inserts, updates, deletes, and bad data of every kind
 
 ## Architecture
 
@@ -35,9 +35,9 @@ SilverTableDP.py (Lakeflow SDP pipeline)
 | File | Purpose |
 |---|---|
 | `config.yaml` | Catalog / schema / table / volume names |
-| `_config.py` | Loads config, shared Spark helpers (`ensure_uc_resources`, `read_latest_parquet`) |
+| `_config.py` | Loads config, shared Spark helpers (`ensure_uc_resources`, `get_latest_folder`, `read_latest_parquet`) |
 | `_shared.py` | DQX rule definitions and `apply_dqx` / `write_quarantine` helpers |
-| `WriteTestData.py` | Generates synthetic test data for steps 1-7 and writes to a landing volume |
+| `WriteTestData.py` | Generates synthetic test data for steps 1-8 and writes to a landing volume |
 | `LandingZoneBronze.py` | Reads landing parquet, runs DQX, writes valid rows to bronze, quarantines invalid rows |
 | `SilverTableDP.py` | Lakeflow Spark Declarative Pipeline — SCD Type 2 from bronze CDF |
 | `SummaryMetrics.py` | Reads bronze / silver / quarantine and prints a pipeline health scorecard |
@@ -89,19 +89,20 @@ databricks bundle run scenario_run --profile <profile> -p step=1 -p load_type=fu
 databricks bundle run scenario_run --profile <profile> -p step=2 -p load_type=partial
 ```
 
-## 7-step simulation scenario
+## 8-step simulation scenario
 
 | Step | Load type | Data description | Expected quarantine |
 |---|---|---|---|
 | 1 | full | 3 clean baseline rows (Roger, Alice, Bob) | none |
 | 2 | partial | 3 new clean rows + Oscar with null age | `age_not_null` (1 error) |
 | 3 | partial | Valid updates + `B0b2.0` (bad name) + null name | `name_format`, `name_not_null` (2 errors) |
-| 4 | full | Alice deleted, ages updated + Ghost with null id | `id_not_null` (1 error) |
+| 4 | full | Alice SCD2-closed, ages updated + Ghost with null id | `id_not_null` (1 error) |
 | 5 | partial | Eve updated + `J4ne!` (bad name) + Paul with null age | `name_format`, `age_not_null` (2 errors) |
 | 6 | partial | Frank updated + Henry added + fully null row | `id_not_null`, `name_not_null`, `age_not_null` (3 errors) |
-| 7 | full | Clean full refresh — only valid records survive | none |
+| 7 | full | Full refresh: absent records SCD2-closed + Ghost with null id | `id_not_null` (1 error) |
+| 8 | partial | Roger age updated (30 → 33) | none |
 
-Total: 10 quarantine errors across 5 steps, 4 distinct rules triggered.
+Total: 10 quarantine errors across 6 steps, 4 distinct rules triggered.
 
 ## Getting started
 
@@ -132,9 +133,9 @@ Total: 10 quarantine errors across 5 steps, 4 distinct rules triggered.
    databricks bundle deploy --profile <your-profile>
    ```
 
-5. Run the full demo scenario:
+5. Run a demo scenario step:
    ```bash
-   databricks bundle run full_scenario --profile <your-profile>
+   databricks bundle run scenario_run --profile <your-profile> -p step=1 -p load_type=full
    ```
 
 6. After the run completes, open and run `SummaryMetrics.py` in your workspace to see the health scorecard.
@@ -155,9 +156,9 @@ databricks bundle run partial_load --profile <your-profile>
 
 **Full vs partial load semantics** — A `full` load overwrites bronze entirely; rows absent from the new batch become CDF delete events, which close their SCD2 rows in silver. A `partial` load is a merge/upsert — no rows are deleted.
 
-**UUID `run_id`** — Each call to `write_quarantine()` generates a fresh UUID. This gives every task execution in a multi-task job a distinct identifier, even on Databricks Serverless where JVM-level run IDs are unavailable.
+**Job run `run_id`** — Each call to `write_quarantine()` captures the Databricks job run ID (`ctx.jobRunId()`). This ties every quarantine record back to the exact job run that produced it, enabling per-run lineage queries in the quarantine table.
 
 **Checkpoint management** — If you drop and recreate the bronze table, you must run a full refresh on the silver pipeline to clear its CDF checkpoint before the next job run:
 ```bash
-databricks pipelines start-update <pipeline-id> --full-refresh --profile <your-profile>
+databricks bundle run silver_scd2 --full-refresh-all --profile <your-profile>
 ```
