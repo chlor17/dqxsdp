@@ -16,28 +16,27 @@ load_type = dbutils.widgets.get("load_type")
 
 assert load_type in ("full", "partial"), f"Invalid load_type: '{load_type}'. Must be 'full' or 'partial'."
 
-volume = Vol_Full if load_type == "full" else Vol_Partial
-print(f"load_type={load_type} | volume={volume}")
+print(f"load_type={load_type}")
 
 # COMMAND ----------
 
-# DBTITLE 1,Create UC resources
-ensure_uc_resources(volume)
+# DBTITLE 1,Read from landing volume
+vol_name   = Vol_Full if load_type == "full" else Vol_Partial
+ensure_uc_resources(vol_name)
+landing_ts = get_latest_folder(vol_name)
+landing_df = spark.read.parquet(f"{vol_path(vol_name)}/{landing_ts}")
+print(f"Landing batch_ts: {landing_ts}")
 
 # COMMAND ----------
 
 # DBTITLE 1,DQX — split landing into valid / quarantine
-landing_folder = get_latest_folder(volume)
-landing_ts     = landing_folder.removeprefix(f"{volume}_")   # e.g. "20260331153318"
-print(f"Landing folder: {landing_folder} | batch_ts: {landing_ts}")
-
-landing_df                                    = read_latest_parquet(volume)
 valid_df, invalid_df, valid_count, quarantine_count = apply_dqx(landing_df)
 
 # COMMAND ----------
 
-# DBTITLE 1,Write invalid records to quarantine
-write_quarantine(invalid_df, load_type=load_type, batch_ts=landing_ts)
+# DBTITLE 1,Write invalid records to quarantine (Delta) and GRS volume (parquet)
+quarantine_vol_path = f"{vol_path(Vol_Clean, 'quarantine')}/{landing_ts}"
+write_quarantine(invalid_df, load_type=load_type, batch_ts=landing_ts, quarantine_vol_path=quarantine_vol_path, quarantine_count=quarantine_count)
 
 # COMMAND ----------
 
@@ -55,33 +54,14 @@ if quarantine_rate > Quarantine_threshold:
 
 # COMMAND ----------
 
-# DBTITLE 1,Write clean data to volume and bronze
+# DBTITLE 1,Write clean records to clean volume
 ensure_uc_resources(Vol_Clean)
+clean_path = f"{vol_path(Vol_Clean, 'clean')}/{landing_ts}"
+valid_df.coalesce(1).write.mode("overwrite").parquet(clean_path)
+print(f"Clean data written to: {clean_path}")
 
-clean_path = f"/Volumes/{catalog}/{schema}/{Vol_Clean}/{load_type}_{landing_ts}"
-valid_df.write.mode("overwrite").parquet(clean_path)
-print(f"Clean data written: {clean_path}")
+# COMMAND ----------
 
-bronze_path = f"{catalog}.{schema}.{Bronze_Table}"
-clean_df    = spark.read.parquet(clean_path).withColumn("batch_ts", F.to_timestamp(F.lit(landing_ts), "yyyyMMddHHmmss"))
-
-if load_type == "full":
-    # Full overwrite — absent rows become CDF deletes → silver closes them
-    (clean_df.write
-        .format("delta")
-        .option("delta.enableChangeDataFeed", "true")
-        .mode("overwrite")
-        .saveAsTable(bronze_path)
-    )
-    print(f"Bronze overwritten: {bronze_path}")
-else:
-    # Partial merge — upsert only, no deletes
-    (DeltaTable.forName(spark, bronze_path).alias("b")
-        .merge(clean_df.alias("p"), "b.id = p.id")
-        .whenMatchedUpdateAll()
-        .whenNotMatchedInsertAll()
-        .execute()
-    )
-    print(f"Bronze merged: {bronze_path}")
-
+# DBTITLE 1,Write clean data to bronze
+bronze_path = write_to_bronze(valid_df, load_type)
 display(spark.read.table(bronze_path))

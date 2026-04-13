@@ -85,12 +85,21 @@ _STEPS = {
     8: [(1, "Roger",    33)],
 }
 
-rows   = _STEPS[step]
-volume = Vol_Full if load_type == "full" else Vol_Partial
+rows = _STEPS[step]
 
-ensure_uc_resources(volume)
+# Recreate landing volume each run to ensure a clean HNS directory in storage
+vol_name = Vol_Full if load_type == "full" else Vol_Partial
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS `{schema}`")
+spark.sql(f"DROP VOLUME IF EXISTS `{schema}`.`{vol_name}`")
+spark.sql(f"CREATE VOLUME `{schema}`.`{vol_name}`")
 
-volume_path = f"/Volumes/{catalog}/{schema}/{volume}/{volume}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-spark.createDataFrame(rows, ["id", "name", "age"]).write.mode("overwrite").parquet(volume_path)
+# Write to landing volume as Parquet under a timestamped folder
+batch_ts_str = datetime.now().strftime('%Y%m%d%H%M%S')
+landing_df = (
+    spark.createDataFrame(rows, ["id", "name", "age"])
+    .withColumn("batch_ts", F.to_timestamp(F.lit(batch_ts_str), "yyyyMMddHHmmss"))
+)
+out_path = f"{vol_path(vol_name)}/{batch_ts_str}"
+landing_df.coalesce(1).write.mode("overwrite").parquet(out_path)
 
-print(f"Step {step} | load_type={load_type} | {len(rows)} rows written to: {volume_path}")
+print(f"Step {step} | load_type={load_type} | {len(rows)} rows written to {out_path} | batch_ts={batch_ts_str}")

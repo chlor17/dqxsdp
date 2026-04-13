@@ -1,11 +1,12 @@
 from pyspark import pipelines as dp
-from pyspark.sql.functions import expr, col, current_timestamp, date_format
+from pyspark.sql import functions as F
+from pyspark.sql.functions import expr, col, date_format
 
 catalog = spark.conf.get("Catalog")
 schema = spark.conf.get("Schema")
 bronze_table = spark.conf.get("Bronze_table")
 
-source_path = f"{catalog}.{schema}.{bronze_table}"
+source_path = f"`{catalog}`.`{schema}`.`{bronze_table}`"
 
 
 @dp.view(name="bronze_full")
@@ -43,23 +44,36 @@ dp.create_auto_cdc_flow(
 
 
 # ── Operation log ─────────────────────────────────────────────────────────────
-dp.create_streaming_table(
+# @dp.table with a streaming source and stateful groupBy runs in COMPLETE mode:
+# SDP recomputes the full aggregation from accumulated checkpoint state each run,
+# then rewrites the table. This naturally produces correct per-batch counts
+# whether silver processes one bronze commit or many (e.g. DR catchup), with no
+# watermark needed and no risk of count inflation across runs.
+
+
+@dp.table(
     name="operation_log",
-    comment="Row-level log of every CDF event (insert / update / delete) flowing into silver",
+    comment="Per-batch count of inserts, updates, and deletes flowing into silver",
 )
-
-
-@dp.append_flow(target="operation_log")
 def log_silver_operations():
-    """Capture every bronze CDF event as it flows into silver."""
+    """Aggregate bronze CDF events into per-batch operation counts.
+
+    Groups by (_commit_version, source_batch) so each atomic bronze commit
+    produces exactly one row. _commit_version is dropped from the output.
+    """
     return (
         spark.readStream.format("delta")
         .option("readChangeFeed", "true")
         .table(source_path)
-        .select(
-            col("id"),
-            col("_change_type").alias("operation"),
+        .groupBy(
+            col("_commit_version"),
             date_format(col("batch_ts"), "yyyyMMddHHmmss").alias("source_batch"),
-            current_timestamp().alias("logged_at"),
         )
+        .agg(
+            F.sum(F.when(col("_change_type") == "insert",           1).otherwise(0)).alias("inserts"),
+            F.sum(F.when(col("_change_type") == "update_postimage", 1).otherwise(0)).alias("updates"),
+            F.sum(F.when(col("_change_type") == "delete",           1).otherwise(0)).alias("deletes"),
+            F.max("_commit_timestamp").alias("logged_at"),
+        )
+        .drop("_commit_version")
     )

@@ -7,18 +7,33 @@ sync:
 
 variables:
   catalog:
-    default: your_catalog
+    default: primary_catalog
   schema:
-    default: your_schema
+    default: project
 
 targets:
   dev:
     mode: development
     default: true
     workspace:
-      host: https://your-workspace.cloud.databricks.com
-      profile: your-profile
-      file_path: /Workspace/Users/your-email@example.com/dqx
+      host: https://<primary-workspace>.azuredatabricks.net/
+      profile: primary
+      file_path: /Workspace/Users/<your-username>/dqx-pipeline
+
+  # ── Disaster-recovery region ───────────────────────────────────────────────
+  # Activated only when grsvolume has been replicated to the DR workspace.
+  # Entry point is LandingZoneBronzeDR.py (reads from grsvolume, skips DQX).
+  # Deploy with: databricks bundle deploy --target dr --profile dr
+  # Run with:    databricks bundle run dr_full_load --target dr --profile dr
+  dr:
+    mode: development
+    workspace:
+      host: https://<dr-workspace>.azuredatabricks.net/
+      profile: dr
+      file_path: /Workspace/Users/<your-username>/dqx-pipeline
+    variables:
+      catalog: dr_catalog
+      schema:  project
 
 resources:
 
@@ -78,9 +93,34 @@ resources:
           notebook_task:
             notebook_path: ./SummaryMetrics.py
 
+    # Bronze-only scenario step — write → bronze, no silver.
+    # Used to stack multiple bronze loads before a single silver run.
+    # Run with: databricks bundle run scenario_bronze_only --profile <profile> \
+    #             --params step=2,load_type=partial
+    scenario_bronze_only:
+      name: dqx-scenario-bronze-only
+      parameters:
+        - name: step
+          default: "1"
+        - name: load_type
+          default: full
+      tasks:
+        - task_key: write
+          notebook_task:
+            notebook_path: ./WriteTestData.py
+            base_parameters:
+              step:      "{{job.parameters.step}}"
+              load_type: "{{job.parameters.load_type}}"
+        - task_key: bronze
+          depends_on: [{task_key: write}]
+          notebook_task:
+            notebook_path: ./LandingZoneBronze.py
+            base_parameters:
+              load_type: "{{job.parameters.load_type}}"
+
     # Single parameterised scenario run — one write → bronze → silver per execution
     # Run with: databricks bundle run scenario_run --profile <profile> \
-    #             -p step=2 -p load_type=partial
+    #             --params step=2,load_type=partial
     scenario_run:
       name: dqx-scenario-run
       parameters:
@@ -109,3 +149,117 @@ resources:
           depends_on: [{task_key: silver}]
           notebook_task:
             notebook_path: ./SummaryMetrics.py
+
+    # ── DR jobs — start from replicated grsvolume, skip DQX ─────────────────
+    # Mirror of full_load / partial_load but reading from grsvolume instead of
+    # the raw landing volumes. Deploy/run against --target dr only.
+
+    # DR — full load (triggered after primary full_load replicates grsvolume)
+    dr_full_load:
+      name: dqx-dr-full-load
+      parameters:
+        - name: dr_batch_ts
+          default: ""
+      tasks:
+        - task_key: bronze
+          notebook_task:
+            notebook_path: ./LandingZoneBronzeDR.py
+            base_parameters:
+              load_type:    full
+              dr_catalog:   dr_catalog
+              dr_schema:    project
+              dr_vol_clean: grsvolume
+              dr_batch_ts:  "{{job.parameters.dr_batch_ts}}"
+        - task_key: silver
+          depends_on: [{task_key: bronze}]
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.silver_scd2.id}
+        - task_key: summary
+          depends_on: [{task_key: silver}]
+          notebook_task:
+            notebook_path: ./SummaryMetrics.py
+            base_parameters:
+              dr_catalog: dr_catalog
+              dr_schema:  project
+
+    # DR — multi-batch catchup: runs N partial bronze merges in order, then silver + summary once
+    # Usage: databricks bundle run dr_partial_catchup --target dr --profile dr \
+    #          --params "batch_ts_1=<ts1>,batch_ts_2=<ts2>,batch_ts_3=<ts3>"
+    dr_partial_catchup:
+      name: dqx-dr-partial-catchup
+      parameters:
+        - name: batch_ts_1
+          default: ""
+        - name: batch_ts_2
+          default: ""
+        - name: batch_ts_3
+          default: ""
+      tasks:
+        - task_key: bronze_1
+          notebook_task:
+            notebook_path: ./LandingZoneBronzeDR.py
+            base_parameters:
+              load_type:    partial
+              dr_catalog:   dr_catalog
+              dr_schema:    project
+              dr_vol_clean: grsvolume
+              dr_batch_ts:  "{{job.parameters.batch_ts_1}}"
+        - task_key: bronze_2
+          depends_on: [{task_key: bronze_1}]
+          notebook_task:
+            notebook_path: ./LandingZoneBronzeDR.py
+            base_parameters:
+              load_type:    partial
+              dr_catalog:   dr_catalog
+              dr_schema:    project
+              dr_vol_clean: grsvolume
+              dr_batch_ts:  "{{job.parameters.batch_ts_2}}"
+        - task_key: bronze_3
+          depends_on: [{task_key: bronze_2}]
+          notebook_task:
+            notebook_path: ./LandingZoneBronzeDR.py
+            base_parameters:
+              load_type:    partial
+              dr_catalog:   dr_catalog
+              dr_schema:    project
+              dr_vol_clean: grsvolume
+              dr_batch_ts:  "{{job.parameters.batch_ts_3}}"
+        - task_key: silver
+          depends_on: [{task_key: bronze_3}]
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.silver_scd2.id}
+        - task_key: summary
+          depends_on: [{task_key: silver}]
+          notebook_task:
+            notebook_path: ./SummaryMetrics.py
+            base_parameters:
+              dr_catalog: dr_catalog
+              dr_schema:  project
+
+    # DR — partial load (triggered after primary partial_load replicates grsvolume)
+    dr_partial_load:
+      name: dqx-dr-partial-load
+      parameters:
+        - name: dr_batch_ts
+          default: ""
+      tasks:
+        - task_key: bronze
+          notebook_task:
+            notebook_path: ./LandingZoneBronzeDR.py
+            base_parameters:
+              load_type:    partial
+              dr_catalog:   dr_catalog
+              dr_schema:    project
+              dr_vol_clean: grsvolume
+              dr_batch_ts:  "{{job.parameters.dr_batch_ts}}"
+        - task_key: silver
+          depends_on: [{task_key: bronze}]
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.silver_scd2.id}
+        - task_key: summary
+          depends_on: [{task_key: silver}]
+          notebook_task:
+            notebook_path: ./SummaryMetrics.py
+            base_parameters:
+              dr_catalog: dr_catalog
+              dr_schema:  project

@@ -3,11 +3,16 @@
 
 # COMMAND ----------
 
+dbutils.widgets.text("dr_catalog", "", "DR catalog override (leave blank to use config.yaml)")
+dbutils.widgets.text("dr_schema",  "", "DR schema override (leave blank to use config.yaml)")
+
+# COMMAND ----------
+
 from pyspark.sql import functions as F
 
-bronze_path     = f"{catalog}.{schema}.{Bronze_Table}"
-quarantine_path = f"{catalog}.{schema}.{Quarantine_Table}"
-silver_path     = f"{catalog}.{schema}.silver"
+bronze_path     = tbl(Bronze_Table)
+quarantine_path = tbl(Quarantine_Table)
+silver_path     = tbl("silver")
 
 # COMMAND ----------
 
@@ -59,19 +64,8 @@ if quarantine_df is not None:
 # COMMAND ----------
 
 # DBTITLE 1,Silver — operation log (inserts / updates / deletes per run)
-op_log_df = spark.read.table(f"{catalog}.{schema}.operation_log")
-display(
-    op_log_df
-    .groupBy("source_batch")
-    .pivot("operation", ["insert", "update_postimage", "delete"])
-    .agg(F.count(F.lit(1)))
-    .withColumnsRenamed({
-        "insert":           "inserts",
-        "update_postimage": "updates",
-        "delete":           "deletes",
-    })
-    .orderBy("source_batch")
-)
+op_log_df = spark.read.table(tbl("operation_log"))
+display(op_log_df.orderBy("source_batch"))
 
 # COMMAND ----------
 

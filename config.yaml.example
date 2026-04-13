@@ -1,8 +1,8 @@
-Catalog: your_catalog
-Schema:  your_schema
-Bronze_table:        bronze_table
-Quarantine_table:    quarantine
-Vol_Full:            landing_full
-Vol_Partial:         landing_partial
-Vol_Clean:           clean_data
+Catalog: primary_catalog
+Schema: project
+Bronze_table: bronze_table
+Quarantine_table: quarantine
+Vol_Full: landing_full
+Vol_Partial: landing_partial
 Quarantine_threshold: 0.10  # Skip silver if quarantine rate exceeds this fraction
+Vol_Clean: grsvolume
